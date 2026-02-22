@@ -83,8 +83,9 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
 
                 // Bypass slow CLI cold boots by calling the persistently running local OpenClaw daemon API natively via WebSocket RPC
                 assistantReply = await new Promise((resolve) => {
-                    const wsUrl = `ws://127.0.0.1:18789?token=${encodeURIComponent(gatewayToken)}`;
+                    const wsUrl = `ws://127.0.0.1:18789/ws`;
                     const ws = new WebSocket(wsUrl);
+                    const crypto = require('crypto');
 
                     let resolved = false;
 
@@ -94,13 +95,12 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                         }
                     };
 
-                    ws.on('open', () => {
-                        console.log("[Bridge] Connected to OpenClaw WebSocket RPC Gateway.");
-                        // Standard OpenClaw JSON-RPC syntax for Gateway execution
+                    const sendAgentTurn = () => {
+                        console.log("[Bridge] Authenticated. Dispatching transcript to OpenClaw Agent...");
                         const rpcPayload = {
                             jsonrpc: "2.0",
                             method: "agent/turn",
-                            id: Date.now(),
+                            id: Date.now().toString(),
                             params: {
                                 agentId: "main",
                                 message: transcript,
@@ -108,11 +108,36 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                             }
                         };
                         ws.send(JSON.stringify(rpcPayload));
+                    };
+
+                    ws.on('open', () => {
+                        console.log("[Bridge] Connected to OpenClaw WebSocket RPC Gateway. Waiting for challenge...");
                     });
 
                     ws.on('message', (data) => {
                         try {
                             const response = JSON.parse(data.toString());
+
+                            // 1. Handle Cryptographic Challenge
+                            if (response.type === 'event' && response.event === 'connect.challenge') {
+                                const nonce = response.payload.nonce;
+                                const signature = crypto.createHmac('sha256', gatewayToken).update(nonce).digest('hex');
+
+                                ws.send(JSON.stringify({
+                                    type: 'action',
+                                    action: 'connect.authenticate',
+                                    payload: { signature: signature }
+                                }));
+                                return;
+                            }
+
+                            // 2. Handle Authentication Success
+                            if (response.type === 'event' && response.event === 'connect.authenticated') {
+                                sendAgentTurn();
+                                return;
+                            }
+
+                            // 3. Handle RPC Response
                             if (response.id && response.result) {
                                 let finalReply = "Cevap boş döndü.";
                                 const resData = response.result;
