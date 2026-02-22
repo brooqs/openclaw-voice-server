@@ -83,7 +83,7 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
 
                 // Bypass slow CLI cold boots by calling the persistently running local OpenClaw daemon API natively via WebSocket RPC
                 assistantReply = await new Promise((resolve) => {
-                    const wsUrl = `ws://127.0.0.1:18789/ws`;
+                    const wsUrl = `ws://127.0.0.1:18789/ws?token=${encodeURIComponent(gatewayToken)}`;
                     const ws = new WebSocket(wsUrl);
                     const crypto = require('crypto');
 
