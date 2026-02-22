@@ -60,23 +60,58 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
         let assistantReply = "Anlayamadım.";
 
         // Only query OpenClaw if we actually have text
+        // Only query OpenClaw if we actually have text
         if (transcript.length > 0) {
             try {
+                // Determine Moltbot OpenClaw Backend Token Access implicitly via the root storage
+                const openclawConfigPath = path.join(process.env.HOME || '/root', '.openclaw', 'openclaw.json');
+                let gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN || "";
+
+                if (!gatewayToken && fs.existsSync(openclawConfigPath)) {
+                    try {
+                        const configData = JSON.parse(fs.readFileSync(openclawConfigPath, 'utf8'));
+                        gatewayToken = configData.gateway?.token || "";
+                    } catch (err) {
+                        console.error("[Bridge] Failed to parse openclaw.json:", err.message);
+                    }
+                }
+
+                if (!gatewayToken) {
+                    console.warn("[Bridge] CRITICAL WARNING: No OpenClaw gateway token found in ~/.openclaw/openclaw.json! Connection might be refused.");
+                }
+
                 // Bypass slow CLI cold boots by calling the persistently running local OpenClaw daemon API
-                const apiResponse = await axios.post('http://127.0.0.1:18789/api/v1/agent/main/chat', {
-                    message: transcript
+                const apiResponse = await axios.post('http://127.0.0.1:18789/api/agent/turn', {
+                    agentId: "main",
+                    message: transcript,
+                    sessionKey: "agent:main:main"
                 }, {
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${gatewayToken}`
+                    },
                     timeout: 200000
                 });
 
-                if (apiResponse.data && apiResponse.data.response) {
-                    assistantReply = apiResponse.data.response.trim();
+                // Extract response based on Gateway API Agent Turn schema response
+                if (apiResponse.data && typeof apiResponse.data === 'object') {
+                    if (apiResponse.data.text) {
+                        assistantReply = apiResponse.data.text.trim();
+                    } else if (apiResponse.data.reply) {
+                        assistantReply = apiResponse.data.reply.trim();
+                    } else if (apiResponse.data.messages && apiResponse.data.messages.length > 0) {
+                        const lastMsg = apiResponse.data.messages[apiResponse.data.messages.length - 1];
+                        assistantReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
+                    } else if (apiResponse.data.response) {
+                        assistantReply = apiResponse.data.response.trim();
+                    } else {
+                        assistantReply = JSON.stringify(apiResponse.data);
+                    }
                 } else {
                     assistantReply = "Cevap boş döndü.";
                 }
             } catch (e) {
-                console.error("[Bridge] API Request Error:", e.message);
+                console.error("[Bridge] API Request Error:", e.response ? JSON.stringify(e.response.data) : e.message);
             }
         }
         console.log(`[Bridge] Assistant Reply: ${assistantReply}`);
