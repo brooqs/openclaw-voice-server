@@ -16,6 +16,8 @@
         <key>PORT</key>
         <string>18790</string>
         <!-- Uncomment and add your keys below -->
+        <!-- <key>OPENCLAW_GATEWAY_TOKEN</key> -->
+        <!-- <string>YOUR_GATEWAY_TOKEN</string> -->
         <!-- <key>ELEVENLABS_API_KEY</key> -->
         <!-- <string>YOUR_API_KEY</string> -->
     </dict>

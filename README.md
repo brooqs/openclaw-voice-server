@@ -18,7 +18,9 @@ This repository contains the standalone Node.js Voice Relay Bridge required for 
    cd openclaw-voice-server
    npm install
    ```
-3. Open `bridge.js` and input your native API Keys at the top, or export them via `process.env`.
+3. Edit your chosen background daemon template (`openclaw-bridge.service` for Linux or `com.openclaw.voicebridge.plist` for macOS) and uncomment the `Environment` / `EnvironmentVariables` block to inject your keys:
+   - `OPENCLAW_GATEWAY_TOKEN`: Extracted from your `~/.openclaw/openclaw.json` or `openclaw status`.
+   - `ELEVENLABS_API_KEY`: Your ElevenLabs Developer API Key.
 
 ## 💻 Running as a Background Service
 

@@ -12,6 +12,7 @@ RestartSec=5
 # Adjust environment variables accordingly, or use an EnvironmentFile
 Environment=NODE_ENV=production
 Environment=PORT=18790
+# Environment=OPENCLAW_GATEWAY_TOKEN=YOUR_GATEWAY_TOKEN
 # Environment=ELEVENLABS_API_KEY=YOUR_API_KEY
 # Environment=ELEVENLABS_VOICE_ID=YOUR_VOICE_ID
 
