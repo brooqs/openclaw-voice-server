@@ -238,15 +238,24 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                             }
 
                             // 3. Handle RPC Response
-                            if (response.type === 'res' && response.id !== 'auth_1') {
-                                let finalReply = "Cevap boş döndü.";
-
+                            if (response.type === 'event' && response.event === 'chat') {
+                                // Harvest the actual text payload mid-stream
+                                if (response.payload && response.payload.state === 'final') {
+                                    const msg = response.payload.message;
+                                    if (msg && msg.role === 'assistant' && msg.content && msg.content.length > 0) {
+                                        ws.finalAssistantReply = msg.content[0].text;
+                                    }
+                                }
+                            } else if (response.type === 'res' && response.id !== 'auth_1' && response.id !== 'approve-1') {
                                 if (response.ok === false && response.error) {
                                     console.error("[Bridge] OpenClaw Agent RPC Error:", response.error);
-                                    finalReply = "OpenClaw Hatası: " + (response.error.message || response.error.code || "Bilinmiyor").trim();
+                                    if (!resolved) {
+                                        resolved = true;
+                                        cleanup();
+                                        resolve("OpenClaw Hatası: " + (response.error.message || response.error.code || "Bilinmiyor").trim());
+                                    }
                                 } else {
-                                    // The 'agent' method returns a runId and status initially, not the transcript string!
-                                    // To read the transcript correctly, we must capture runId and query agent.wait!
+                                    // The 'agent' method returns a runId immediately
                                     const resData = response.payload || response.result || {};
                                     if (resData.runId && resData.status === 'accepted') {
                                         console.log(`[Bridge] Agent execution began (Run ID: ${resData.runId}). Blocking for completion payload...`);
@@ -256,19 +265,15 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                             method: "agent.wait",
                                             params: { runId: resData.runId }
                                         }));
-                                        return; // Do NOT resolve the promise yet. wait for wait_ callback.
-                                    } else if (resData.result && resData.status === 'completed') {
-                                        // This handles the payload emitted by the 'agent.wait' resolution
-                                        finalReply = (resData.result.text || resData.result.content || "Bir hata oluştu.").trim();
-                                    } else {
-                                        console.log("[Bridge] Unparsable response payload:", JSON.stringify(resData));
+                                        return; // Wait for wait_ callback.
+                                    } else if (resData.status === 'ok' && resData.endedAt) {
+                                        // The 'agent.wait' completed. Retrieve the text we harvested from the chat stream
+                                        if (!resolved) {
+                                            resolved = true;
+                                            cleanup();
+                                            resolve(ws.finalAssistantReply || "Cevap boş döndü.");
+                                        }
                                     }
-                                }
-
-                                if (!resolved) {
-                                    resolved = true;
-                                    cleanup();
-                                    resolve(finalReply);
                                 }
                             } else if (response.error && response.id !== 'auth_1') {
                                 console.error("[Bridge] OpenClaw Socket Error:", response.error);
