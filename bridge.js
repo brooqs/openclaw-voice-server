@@ -56,17 +56,27 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
         const transcript = sttResponse.data.text ? sttResponse.data.text.trim() : "";
         console.log(`[Bridge] Transcript: ${transcript}`);
 
-        console.log('[Bridge] Sending to OpenClaw CLI...');
+        console.log('[Bridge] Sending to OpenClaw API...');
         let assistantReply = "Anlayamadım.";
 
         // Only query OpenClaw if we actually have text
         if (transcript.length > 0) {
             try {
-                // Using the explicitly correct session routing flag --agent main
-                const cliOutput = execFileSync("openclaw", ["agent", "--agent", "main", "--message", transcript]).toString().trim();
-                assistantReply = cliOutput || "Anlayamadım.";
+                // Bypass slow CLI cold boots by calling the persistently running local OpenClaw daemon API
+                const apiResponse = await axios.post('http://127.0.0.1:18789/api/v1/agent/main/chat', {
+                    message: transcript
+                }, {
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 200000
+                });
+
+                if (apiResponse.data && apiResponse.data.response) {
+                    assistantReply = apiResponse.data.response.trim();
+                } else {
+                    assistantReply = "Cevap boş döndü.";
+                }
             } catch (e) {
-                console.error("[Bridge] CLI Exec Error:", e.message);
+                console.error("[Bridge] API Request Error:", e.message);
             }
         }
         console.log(`[Bridge] Assistant Reply: ${assistantReply}`);
