@@ -127,6 +127,7 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                         minProtocol: 3,
                                         maxProtocol: 3,
                                         auth: { token: gatewayToken },
+                                        scopes: ['operator.admin'], // Elevate session to admin scope
                                         client: {
                                             id: 'gateway-client',
                                             version: '1.0',
@@ -156,13 +157,21 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                             // 3. Handle RPC Response
                             if (response.type === 'res' && response.id !== 'auth_1') {
                                 let finalReply = "Cevap boş döndü.";
-                                const resData = response.payload || response.result || {};
 
-                                if (resData && resData.messages && resData.messages.length > 0) {
-                                    const lastMsg = resData.messages[resData.messages.length - 1];
-                                    finalReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
-                                } else if (resData.text) {
-                                    finalReply = resData.text.trim();
+                                if (response.ok === false && response.error) {
+                                    console.error("[Bridge] OpenClaw Agent RPC Error:", response.error);
+                                    finalReply = "OpenClaw Hatası: " + (response.error.message || response.error.code || "Bilinmiyor").trim();
+                                } else {
+                                    const resData = response.payload || response.result || {};
+
+                                    if (resData && resData.messages && resData.messages.length > 0) {
+                                        const lastMsg = resData.messages[resData.messages.length - 1];
+                                        finalReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
+                                    } else if (resData && resData.text) {
+                                        finalReply = resData.text.trim();
+                                    } else {
+                                        console.log("[Bridge] Unparsable response payload:", JSON.stringify(resData));
+                                    }
                                 }
 
                                 if (!resolved) {
@@ -170,8 +179,8 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                     cleanup();
                                     resolve(finalReply);
                                 }
-                            } else if (response.error) {
-                                console.error("[Bridge] OpenClaw RPC Payload Error:", response.error);
+                            } else if (response.error && response.id !== 'auth_1') {
+                                console.error("[Bridge] OpenClaw Socket Error:", response.error);
                                 if (!resolved) {
                                     resolved = true;
                                     cleanup();
