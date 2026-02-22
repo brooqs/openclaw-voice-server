@@ -39,6 +39,7 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
         // 2. STT API Request
         const formData = new FormData();
         formData.append('file', fs.createReadStream(wavPath), { filename: 'audio.wav', contentType: 'audio/wav' });
+        formData.append('model_id', 'eleven_multilingual_v2');
 
         const sttResponse = await axios.post('https://api.elevenlabs.io/v1/speech-to-text', formData, {
             headers: {
