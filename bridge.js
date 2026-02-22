@@ -80,38 +80,89 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                     console.warn("[Bridge] CRITICAL WARNING: No OpenClaw gateway token found in ~/.openclaw/openclaw.json! Connection might be refused.");
                 }
 
-                // Bypass slow CLI cold boots by calling the persistently running local OpenClaw daemon API
-                const apiResponse = await axios.post('http://127.0.0.1:18789/api/agent/turn', {
-                    agentId: "main",
-                    message: transcript,
-                    sessionKey: "agent:main:main"
-                }, {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${gatewayToken}`
-                    },
-                    timeout: 200000
+                // Bypass slow CLI cold boots by calling the persistently running local OpenClaw daemon API natively via WebSocket RPC
+                assistantReply = await new Promise((resolve) => {
+                    const wsUrl = `ws://127.0.0.1:18789?token=${encodeURIComponent(gatewayToken)}`;
+                    const ws = new WebSocket(wsUrl);
+
+                    let resolved = false;
+
+                    const cleanup = () => {
+                        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+                            ws.close();
+                        }
+                    };
+
+                    ws.on('open', () => {
+                        console.log("[Bridge] Connected to OpenClaw WebSocket RPC Gateway.");
+                        // Standard OpenClaw JSON-RPC syntax for Gateway execution
+                        const rpcPayload = {
+                            jsonrpc: "2.0",
+                            method: "agent/turn",
+                            id: Date.now(),
+                            params: {
+                                agentId: "main",
+                                message: transcript,
+                                sessionKey: "agent:main:main"
+                            }
+                        };
+                        ws.send(JSON.stringify(rpcPayload));
+                    });
+
+                    ws.on('message', (data) => {
+                        try {
+                            const response = JSON.parse(data.toString());
+                            if (response.id && response.result) {
+                                let finalReply = "Cevap boş döndü.";
+                                const resData = response.result;
+
+                                if (resData.messages && resData.messages.length > 0) {
+                                    const lastMsg = resData.messages[resData.messages.length - 1];
+                                    finalReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
+                                } else if (resData.text) {
+                                    finalReply = resData.text.trim();
+                                }
+
+                                if (!resolved) {
+                                    resolved = true;
+                                    cleanup();
+                                    resolve(finalReply);
+                                }
+                            } else if (response.error) {
+                                console.error("[Bridge] OpenClaw RPC Payload Error:", response.error);
+                                if (!resolved) {
+                                    resolved = true;
+                                    cleanup();
+                                    resolve("Moltbot API hatası.");
+                                }
+                            }
+                        } catch (err) {
+                            console.error("[Bridge] Failed to parse WebSocket response:", err.message);
+                        }
+                    });
+
+                    ws.on('error', (err) => {
+                        console.error("[Bridge] WebSocket Error:", err.message);
+                        if (!resolved) {
+                            resolved = true;
+                            cleanup();
+                            resolve("Bağlantı kurulamadı.");
+                        }
+                    });
+
+                    // Hard timeout for safety
+                    setTimeout(() => {
+                        if (!resolved) {
+                            resolved = true;
+                            console.error("[Bridge] RPC WebSocket Timeout hit (30s) waiting for assistant.");
+                            cleanup();
+                            resolve("Zaman aşımı.");
+                        }
+                    }, 30000); // 30 second timeout
                 });
 
-                // Extract response based on Gateway API Agent Turn schema response
-                if (apiResponse.data && typeof apiResponse.data === 'object') {
-                    if (apiResponse.data.text) {
-                        assistantReply = apiResponse.data.text.trim();
-                    } else if (apiResponse.data.reply) {
-                        assistantReply = apiResponse.data.reply.trim();
-                    } else if (apiResponse.data.messages && apiResponse.data.messages.length > 0) {
-                        const lastMsg = apiResponse.data.messages[apiResponse.data.messages.length - 1];
-                        assistantReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
-                    } else if (apiResponse.data.response) {
-                        assistantReply = apiResponse.data.response.trim();
-                    } else {
-                        assistantReply = JSON.stringify(apiResponse.data);
-                    }
-                } else {
-                    assistantReply = "Cevap boş döndü.";
-                }
             } catch (e) {
-                console.error("[Bridge] API Request Error:", e.response ? JSON.stringify(e.response.data) : e.message);
+                console.error("[Bridge] API Request Error:", e.message);
             }
         }
         console.log(`[Bridge] Assistant Reply: ${assistantReply}`);
