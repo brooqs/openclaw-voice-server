@@ -1,0 +1,15 @@
+{
+    "name": "openclaw-voice-server-bridge",
+    "version": "1.0.0",
+    "description": "Node.js Relay Server to Bridge ESP32-S3-BOX-Lite Audio streams into OpenClaw natively.",
+    "main": "bridge.js",
+    "scripts": {
+        "start": "node bridge.js"
+    },
+    "dependencies": {
+        "axios": "^1.6.0",
+        "express": "^4.18.2",
+        "form-data": "^4.0.0",
+        "multer": "^1.4.5-lts.1"
+    }
+}

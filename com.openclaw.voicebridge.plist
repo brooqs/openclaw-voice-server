@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.voicebridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/opt/openclaw-voice-server/bridge.js</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>PORT</key>
+        <string>18790</string>
+        <!-- Uncomment and add your keys below -->
+        <!-- <key>ELEVENLABS_API_KEY</key> -->
+        <!-- <string>YOUR_API_KEY</string> -->
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/openclaw-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/openclaw-bridge.err</string>
+    <key>WorkingDirectory</key>
+    <string>/opt/openclaw-voice-server</string>
+</dict>
+</plist>
