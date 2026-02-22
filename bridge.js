@@ -24,7 +24,8 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
         }
 
         const audioPath = req.file.path;
-        console.log(`[Bridge] Received audio: ${audioPath}`);
+        const rawSize = fs.statSync(audioPath).size;
+        console.log(`[Bridge] Received raw audio: ${audioPath} (${rawSize} bytes)`);
 
         // Save a copy of the raw PCM audio for the user to listen to
         const savedAudioPath = path.join(saveDir, `esp32_audio_${Date.now()}.raw`);
@@ -36,10 +37,14 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
         const wavPath = `${audioPath}.wav`;
         execSync(`ffmpeg -y -f s16le -ar 16000 -ac 1 -i "${audioPath}" "${wavPath}" > /dev/null 2>&1`);
 
+        const wavSize = fs.statSync(wavPath).size;
+        console.log(`[Bridge] Converted to WAV (${wavSize} bytes)`);
+
         // 2. STT API Request
         const formData = new FormData();
         formData.append('file', fs.createReadStream(wavPath), { filename: 'audio.wav', contentType: 'audio/wav' });
         formData.append('model_id', 'scribe_v1');
+        formData.append('language_code', 'tr');
 
         const sttResponse = await axios.post('https://api.elevenlabs.io/v1/speech-to-text', formData, {
             headers: {
