@@ -85,7 +85,6 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                 assistantReply = await new Promise((resolve) => {
                     const wsUrl = `ws://127.0.0.1:18789/ws?token=${encodeURIComponent(gatewayToken)}`;
                     const ws = new WebSocket(wsUrl);
-                    const crypto = require('crypto');
 
                     let resolved = false;
 
@@ -98,9 +97,9 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                     const sendAgentTurn = () => {
                         console.log("[Bridge] Authenticated. Dispatching transcript to OpenClaw Agent...");
                         const rpcPayload = {
-                            jsonrpc: "2.0",
+                            type: "req",
                             method: "agent/turn",
-                            id: Date.now().toString(),
+                            id: "turn_" + Date.now().toString(),
                             params: {
                                 agentId: "main",
                                 message: transcript,
@@ -118,31 +117,48 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                         try {
                             const response = JSON.parse(data.toString());
 
-                            // 1. Handle Cryptographic Challenge
+                            // 1. Handle Cryptographic Challenge by issuing standard Token Authentication
                             if (response.type === 'event' && response.event === 'connect.challenge') {
-                                const nonce = response.payload.nonce;
-                                const signature = crypto.createHmac('sha256', gatewayToken).update(nonce).digest('hex');
-
                                 ws.send(JSON.stringify({
-                                    type: 'action',
-                                    action: 'connect.authenticate',
-                                    payload: { signature: signature }
+                                    type: 'req',
+                                    id: 'auth_1',
+                                    method: 'connect',
+                                    params: {
+                                        minProtocol: 3,
+                                        maxProtocol: 3,
+                                        auth: { token: gatewayToken },
+                                        client: {
+                                            id: 'gateway-client',
+                                            version: '1.0',
+                                            platform: 'linux',
+                                            mode: 'backend'
+                                        }
+                                    }
                                 }));
                                 return;
                             }
 
-                            // 2. Handle Authentication Success
-                            if (response.type === 'event' && response.event === 'connect.authenticated') {
-                                sendAgentTurn();
+                            // 2. Handle Authentication Success Response
+                            if (response.type === 'res' && response.id === 'auth_1') {
+                                if (response.ok) {
+                                    sendAgentTurn();
+                                } else {
+                                    console.error("[Bridge] OpenClaw Authentication Refused:", response.error);
+                                    if (!resolved) {
+                                        resolved = true;
+                                        cleanup();
+                                        resolve("Yetkilendirme reddedildi.");
+                                    }
+                                }
                                 return;
                             }
 
                             // 3. Handle RPC Response
-                            if (response.id && response.result) {
+                            if (response.type === 'res' && response.id !== 'auth_1') {
                                 let finalReply = "Cevap boş döndü.";
-                                const resData = response.result;
+                                const resData = response.payload || response.result || {};
 
-                                if (resData.messages && resData.messages.length > 0) {
+                                if (resData && resData.messages && resData.messages.length > 0) {
                                     const lastMsg = resData.messages[resData.messages.length - 1];
                                     finalReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
                                 } else if (resData.text) {
