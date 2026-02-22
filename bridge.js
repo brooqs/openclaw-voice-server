@@ -263,7 +263,7 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                             type: "req",
                                             id: `wait_${Date.now()}`,
                                             method: "agent.wait",
-                                            params: { runId: resData.runId, timeout: 60000 }
+                                            params: { runId: resData.runId }
                                         }));
                                         return; // Wait for wait_ callback.
                                     } else if (resData.status === 'ok' && resData.endedAt) {
