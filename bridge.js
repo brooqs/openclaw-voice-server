@@ -6,12 +6,30 @@ const path = require('path');
 const { execSync } = require('child_process');
 const FormData = require('form-data');
 const WebSocket = require('ws');
+const crypto = require('crypto');
+
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
+function derivePublicKeyRaw(publicKeyPem) {
+    const spki = crypto.createPublicKey(publicKeyPem).export({ type: 'spki', format: 'der' });
+    if (spki.length === ED25519_SPKI_PREFIX.length + 32 && spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)) {
+        return spki.subarray(ED25519_SPKI_PREFIX.length);
+    }
+    return spki;
+}
+
+function fingerprintPublicKey(publicKeyPem) {
+    const raw = derivePublicKeyRaw(publicKeyPem);
+    return crypto.createHash('sha256').update(raw).digest('hex');
+}
 
 const app = express();
-const uploadDir = '/tmp/jarvis-uploads/';
-const saveDir = '/root/.openclaw/workspace/saved_audio/';
-fs.mkdirSync(saveDir, { recursive: true });
+const userHome = process.env.HOME || '/tmp';
+const uploadDir = path.join(userHome, '.openclaw-jarvis-uploads');
+const saveDir = path.join(userHome, '.openclaw-saved-audio');
 
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+if (!fs.existsSync(saveDir)) fs.mkdirSync(saveDir, { recursive: true });
 const upload = multer({ dest: uploadDir });
 
 // Replace these placeholders with your actual ElevenLabs credentials
@@ -94,16 +112,50 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                         }
                     };
 
+                    // Load or Generate Persistent Bridge Device Identity for Crypto Signatures
+                    const ID_PATH = path.join(process.env.HOME || '/root', '.openclaw', 'bridge-identity.json');
+                    let identity = null;
+                    if (fs.existsSync(ID_PATH)) {
+                        identity = JSON.parse(fs.readFileSync(ID_PATH, 'utf8'));
+                    } else {
+                        console.log("[Bridge] Generating new persistent ED25519 identity...");
+                        const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+                        identity = {
+                            publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+                            privateKeyPem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+                        };
+                        identity.deviceId = fingerprintPublicKey(identity.publicKeyPem);
+                        if (!fs.existsSync(path.dirname(ID_PATH))) fs.mkdirSync(path.dirname(ID_PATH), { recursive: true });
+                        fs.writeFileSync(ID_PATH, JSON.stringify(identity, null, 2));
+                    }
+
+                    const { deviceId, publicKeyPem, privateKeyPem } = identity;
+                    const privateKey = crypto.createPrivateKey(privateKeyPem);
+
+                    let deviceToken = null;
+                    const TOKEN_PATH = path.join(process.env.HOME || '/root', '.openclaw', 'bridge-token.txt');
+                    if (fs.existsSync(TOKEN_PATH)) {
+                        deviceToken = fs.readFileSync(TOKEN_PATH, 'utf8').trim();
+                    }
+
+                    const clientId = 'gateway-client';
+                    const role = 'operator';
+                    const mode = 'backend';
+                    const scopes = ['operator.admin', 'operator.write'];
+                    const signedAtMs = Date.now();
+
                     const sendAgentTurn = () => {
                         console.log("[Bridge] Authenticated. Dispatching transcript to OpenClaw Agent...");
+                        // Use correct 'agent' method and ensure `idempotencyKey` prevents replay conflicts
                         const rpcPayload = {
                             type: "req",
-                            method: "agent/turn",
-                            id: "turn_" + Date.now().toString(),
+                            id: `turn_${Date.now()}`,
+                            method: "agent",
                             params: {
-                                agentId: "main",
                                 message: transcript,
-                                sessionKey: "agent:main:main"
+                                agentId: "main",
+                                sessionKey: "esp32:bridge",
+                                idempotencyKey: `turn-${Date.now()}`
                             }
                         };
                         ws.send(JSON.stringify(rpcPayload));
@@ -113,26 +165,32 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                         console.log("[Bridge] Connected to OpenClaw WebSocket RPC Gateway. Waiting for challenge...");
                     });
 
-                    ws.on('message', (data) => {
+                    ws.on('message', async (data) => {
                         try {
                             const response = JSON.parse(data.toString());
 
-                            // 1. Handle Cryptographic Challenge by issuing standard Token Authentication
+                            // 1. Handle Cryptographic Challenge by generating an ECDSA/ED25519 signature
                             if (response.type === 'event' && response.event === 'connect.challenge') {
+                                const nonce = response.payload.nonce;
+                                const activeToken = deviceToken || gatewayToken;
+                                const authPayload = [
+                                    'v2', deviceId, clientId, mode, role, scopes.join(','), String(signedAtMs), activeToken, nonce
+                                ].join('|');
+
+                                const signature = crypto.sign(null, Buffer.from(authPayload), privateKey).toString('base64');
+
                                 ws.send(JSON.stringify({
-                                    type: 'req',
-                                    id: 'auth_1',
-                                    method: 'connect',
+                                    type: 'req', id: 'auth_1', method: 'connect',
                                     params: {
-                                        minProtocol: 3,
-                                        maxProtocol: 3,
-                                        auth: { token: gatewayToken },
-                                        scopes: ['operator.admin'], // Elevate session to admin scope
-                                        client: {
-                                            id: 'gateway-client',
-                                            version: '1.0',
-                                            platform: 'linux',
-                                            mode: 'backend'
+                                        minProtocol: 3, maxProtocol: 3,
+                                        auth: { token: deviceToken || gatewayToken },
+                                        role, scopes,
+                                        client: { id: clientId, version: '1.0', platform: 'linux', mode },
+                                        device: {
+                                            id: deviceId,
+                                            // The SDK expects pure SPKI base64url serialization
+                                            publicKey: Buffer.from(derivePublicKeyRaw(publicKeyPem)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+                                            signature, signedAt: signedAtMs, nonce
                                         }
                                     }
                                 }));
@@ -142,6 +200,11 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                             // 2. Handle Authentication Success Response
                             if (response.type === 'res' && response.id === 'auth_1') {
                                 if (response.ok) {
+                                    if (response.payload && response.payload.auth && response.payload.auth.deviceToken) {
+                                        deviceToken = response.payload.auth.deviceToken;
+                                        fs.writeFileSync(TOKEN_PATH, deviceToken);
+                                        console.log('[Bridge] Saved brand new device token !!!');
+                                    }
                                     sendAgentTurn();
                                 } else {
                                     console.error("[Bridge] OpenClaw Authentication Refused:", response.error);
@@ -154,6 +217,26 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                 return;
                             }
 
+                            // 2.5. Handle Pairing Requests Automatically
+                            if (response.type === 'event' && response.event === 'device.pair.requested') {
+                                const reqId = response.requestId || (response.payload && response.payload.requestId);
+                                console.log('[Bridge] Auto-approving pairing request natively for bridge setup:', reqId);
+                                ws.send(JSON.stringify({
+                                    type: 'req', id: 'approve-1', method: 'device.pair.approve',
+                                    params: { requestId: reqId, role, scopes }
+                                }));
+                                return;
+                            }
+                            if (response.type === 'res' && response.id === 'approve-1') {
+                                console.log('[Bridge] Identity Approval OK. Re-running the request dynamically!');
+                                ws.close(); // Force a clean exit to apply new token
+                                if (!resolved) {
+                                    resolved = true;
+                                    resolve("Sunucu kimliği onaylandı. Lütfen komutu tekrar söyleyin.");
+                                }
+                                return;
+                            }
+
                             // 3. Handle RPC Response
                             if (response.type === 'res' && response.id !== 'auth_1') {
                                 let finalReply = "Cevap boş döndü.";
@@ -162,13 +245,21 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                     console.error("[Bridge] OpenClaw Agent RPC Error:", response.error);
                                     finalReply = "OpenClaw Hatası: " + (response.error.message || response.error.code || "Bilinmiyor").trim();
                                 } else {
+                                    // The 'agent' method returns a runId and status initially, not the transcript string!
+                                    // To read the transcript correctly, we must capture runId and query agent.wait!
                                     const resData = response.payload || response.result || {};
-
-                                    if (resData && resData.messages && resData.messages.length > 0) {
-                                        const lastMsg = resData.messages[resData.messages.length - 1];
-                                        finalReply = (lastMsg.text || lastMsg.content || "Bir hata oluştu.").trim();
-                                    } else if (resData && resData.text) {
-                                        finalReply = resData.text.trim();
+                                    if (resData.runId && resData.status === 'accepted') {
+                                        console.log(`[Bridge] Agent execution began (Run ID: ${resData.runId}). Blocking for completion payload...`);
+                                        ws.send(JSON.stringify({
+                                            type: "req",
+                                            id: `wait_${Date.now()}`,
+                                            method: "agent.wait",
+                                            params: { runId: resData.runId }
+                                        }));
+                                        return; // Do NOT resolve the promise yet. wait for wait_ callback.
+                                    } else if (resData.result && resData.status === 'completed') {
+                                        // This handles the payload emitted by the 'agent.wait' resolution
+                                        finalReply = (resData.result.text || resData.result.content || "Bir hata oluştu.").trim();
                                     } else {
                                         console.log("[Bridge] Unparsable response payload:", JSON.stringify(resData));
                                     }
