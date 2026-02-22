@@ -257,13 +257,13 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                                 } else {
                                     // The 'agent' method returns a runId immediately
                                     const resData = response.payload || response.result || {};
-                                    if (resData.runId && resData.status === 'accepted') {
-                                        console.log(`[Bridge] Agent execution began (Run ID: ${resData.runId}). Blocking for completion payload...`);
+                                    if (resData.runId && (resData.status === 'accepted' || resData.status === 'running' || resData.status === 'queued')) {
+                                        console.log(`[Bridge] Agent execution polling (Run ID: ${resData.runId}, Status: ${resData.status})...`);
                                         ws.send(JSON.stringify({
                                             type: "req",
                                             id: `wait_${Date.now()}`,
                                             method: "agent.wait",
-                                            params: { runId: resData.runId }
+                                            params: { runId: resData.runId, timeout: 60000 }
                                         }));
                                         return; // Wait for wait_ callback.
                                     } else if (resData.status === 'ok' && resData.endedAt) {
@@ -301,11 +301,11 @@ app.post('/voice', upload.single('audio'), async (req, res) => {
                     setTimeout(() => {
                         if (!resolved) {
                             resolved = true;
-                            console.error("[Bridge] RPC WebSocket Timeout hit (30s) waiting for assistant.");
+                            console.error("[Bridge] RPC WebSocket Timeout hit (120s) waiting for assistant.");
                             cleanup();
-                            resolve("Zaman aşımı.");
+                            resolve("Bağlantı zaman aşımına uğradı, 120 saniyeyi aştınız.");
                         }
-                    }, 30000); // 30 second timeout
+                    }, 120000); // 120 second timeout
                 });
 
             } catch (e) {
